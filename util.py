@@ -1,4 +1,5 @@
 import operator
+from itertools import izip_longest
 from struct import Struct
 
 class FileStruct(Struct):
@@ -33,3 +34,9 @@ def accumulate(iterable, func=operator.add):
     for element in it:
         total = func(total, element)
         yield total
+
+def grouper(n, iterable, fillvalue=None):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx
+    args = [iter(iterable)] * n
+    return izip_longest(fillvalue=fillvalue, *args)

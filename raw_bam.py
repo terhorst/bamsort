@@ -1,5 +1,6 @@
 from collections import namedtuple
 import cStringIO as StringIO
+import logging
 
 from util import FileStruct
 from data_structs import *
@@ -19,9 +20,9 @@ class RawBAM:
         if header:
             self._process_header()
         else:
-            self.find_rec_start()
+            self._find_rec_start()
 
-    def find_rec_start(self):
+    def _find_rec_start(self):
         rh = self.read_hdr
         s = self.f.read(rh.size)
         hdr = ReadHeader(*rh.unpack(s))
@@ -34,18 +35,20 @@ class RawBAM:
         s = FileStruct('4sI')
         f = self.f
         rh = StringIO.StringIO()
-        magic,l_text = s.unpack(f,rh)
+        magic,l_text = s.unpack(f)
         assert magic=="BAM\1"
         s = FileStruct('%isI' % l_text)
-        hdr, n_ref = s.unpack(f,rh)
+        hdr, n_ref = s.unpack(f)
         refs = []
         for i in range(n_ref):
-            l_name, = int32_t.unpack(f,rh)
+            l_name, = int32_t.unpack(f)
             s = FileStruct("%iscI" % (l_name - 1))
-            name,_,length = s.unpack(f,rh)
+            name,_,length = s.unpack(f)
             refs.append((name,length))
         self.header = (hdr,n_ref,refs)
-        self.rawheader = rh
+        pos = f.tell()
+        f.seek(0)
+        self.rawheader = f.read(pos)
 
     def __iter__(self):
         while True:
@@ -60,5 +63,5 @@ class RawBAM:
             if len(dat) != bs:
                 raise StopIteration
             ret.write(dat)
+            logging.debug(bs)
             yield ptr,ret.getvalue()
-
