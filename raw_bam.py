@@ -1,6 +1,7 @@
 from collections import namedtuple
 import cStringIO as StringIO
 import logging
+import re
 
 from util import FileStruct
 from data_structs import *
@@ -28,7 +29,7 @@ class RawBAM:
         hdr = ReadHeader(*rh.unpack(s))
         while not(0 < hdr.block_size < 1000) or not(0 < hdr.l_seq < 200):
             s += self.f.read(1)
-            hdr = self.ReadHeader(*rh.unpack(s[-rh.size:]))
+            hdr = ReadHeader(*rh.unpack(s[-rh.size:]))
         self.f.seek(len(s)-rh.size)
 
     def _process_header(self):
@@ -49,6 +50,13 @@ class RawBAM:
         pos = f.tell()
         f.seek(0)
         self.rawheader = f.read(pos)
+        # Edit the header to reflect sorting
+        fl = self.rawheader[12:].split('\n')[0]
+        fd = dict([t.split(':') for t in fl.split('\t')])
+        fd['SO'] = 'coordinate'
+        self.rawheader = self.rawheader[:12] + \
+                         "\t".join(["%s:%s" % t for t in fd.items()]) + \
+                         self.rawheader[(12+len(fl)):]
 
     def __iter__(self):
         while True:
@@ -63,5 +71,4 @@ class RawBAM:
             if len(dat) != bs:
                 raise StopIteration
             ret.write(dat)
-            logging.debug(bs)
             yield ptr,ret.getvalue()

@@ -1,20 +1,18 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 import gzip, zlib
-import sys, operator, os
 from cStringIO import StringIO
 from collections import namedtuple
-from multiprocessing import Pool, current_process, RawArray, Process
+from multiprocessing import RawArray, Process
 from multiprocessing.queues import Queue
 import ctypes
 import logging
-import os
+import argparse
 
 from bgzf import BGZFReader
 from raw_bam import RawBAM
 from util import *
 from data_structs import *
 
-N_WORKERS = 1
 READS_PER_BLOCK = 100
 MAX_BLOCK_SIZE = 65536 - BGZFReader.bgzf_s.size - BGZFReader.bgzf_ftr_s.size
 
@@ -22,7 +20,6 @@ CompressedRead = namedtuple("CompressedRead",  "rid pos worker_num ptr bs")
 
 def sort_read_ary(i, bam, blocks, offset, buf, q):
     'Process each read in ary, then store compressed read location and length in bry'
-    logging.debug("Sorting %s %i" % (blocks, i))
     with open(bam, 'rb') as f:
         f.seek(blocks[0].offset)
         buf.raw = gzip.GzipFile(fileobj=f).read(len(buf))
@@ -39,28 +36,27 @@ def sort_read_ary(i, bam, blocks, offset, buf, q):
         cr['ptr'] = ptr
         cr['worker_num'] = i
         lst.append(CompressedRead(**cr))
-    # lst.sort()
+    lst.sort()
     logging.debug("Finished sort; queuing list of length %i" % len(lst))
     q.put(lst)
     logging.debug("Finished queue")
     return True
 
-def parallel_sort(bam, out):
+def parallel_sort(bam, out, n_workers):
     lb = BGZFReader(bam)
     mem = lb.uncompressed_size
     buf = RawArray(ctypes.c_char, mem)
     q = Queue()
     procs = []
 
-    block_allocs = chunk(lb.blocks, N_WORKERS)
+    block_allocs = chunk(lb.blocks, n_workers)
     offsets = [0] + list(accumulate(sum(b.offset for b in blocks) 
                                     for blocks in block_allocs))[:-1]
     ary_szs = [sum([b.size_u for b in blocks]) for blocks in block_allocs]
     bufs = [RawArray(ctypes.c_char,mem) for mem in ary_szs]
-    z = zip(chunk(lb.blocks, N_WORKERS), offsets, bufs)
+    z = zip(chunk(lb.blocks, n_workers), offsets, bufs)
     for i,(blocks,off,buf) in enumerate(z):
         args = (i, bam, blocks, off, buf, q)
-        # sort_read_ary(*args)
         p = Process(target=sort_read_ary, args=args)
         procs.append(p)
         p.start()
@@ -69,14 +65,14 @@ def parallel_sort(bam, out):
     for _ in procs:
         combined += q.get(True)
     logging.debug("Starting combined sort on %i reads" % len(combined))
-    # combined.sort()
+    combined.sort()
     logging.debug("Finished combined sort")
 
     for p in procs:
         p.join()
         logging.debug("Returned from " + str(p))
 
-    hdr = RawBAM(gzip.GzipFile(bam),header=True).rawheader
+    hdr = RawBAM(gzip.GzipFile(bam), header=True).rawheader
     with open(out, 'wb') as f:
         write_bgzf_block(f, hdr)
         for creads in grouper(READS_PER_BLOCK, combined):
@@ -109,4 +105,9 @@ def write_bam_eof(f):
 
 if __name__=="__main__":
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s;%(levelname)s;%(message)s")
-    parallel_sort('test.bam', 'out.bam')
+    parser = argparse.ArgumentParser(description='Sort a BAM file.')
+    parser.add_argument('fin', metavar='in.bam', type=str, help='input BAM file.')
+    parser.add_argument('fout', metavar='out.bam', type=str, help='output BAM file.')
+    parser.add_argument('-n', type=int, help='number of cores', default=8)
+    args = parser.parse_args()
+    parallel_sort(args.fin, args.fout, args.n)
